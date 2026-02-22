@@ -6,10 +6,11 @@
   "bin": {
     "asana-cli": "./src/cli.ts"
   },
-  "dependencies": {
-    "asana": "^3.1.9"
-  },
   "devDependencies": {
+    "@gunshi/docs": "0.29.2",
     "@types/node": "^22.0.0"
+  },
+  "dependencies": {
+    "gunshi": "^0.29.2"
   }
 }
