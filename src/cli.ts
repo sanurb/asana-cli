@@ -112,6 +112,21 @@ await cli(args, entry, {
     "add-project": addProject,
     "add-section": addSection,
   },
+  renderHeader: async () => null,
+  renderValidationErrors: async (ctx, error) => {
+    const messages = error instanceof AggregateError
+      ? error.errors.map((e: Error) => e.message)
+      : [error.message];
+    // Write to stderr and exit — return empty string so gunshi prints nothing further
+    console.error(JSON.stringify({
+      ok: false,
+      command: `asana-cli ${ctx.name ?? "unknown"}`,
+      error: { message: messages.join("; "), code: "INVALID_INPUT" },
+      fix: `Run 'asana-cli ${ctx.name} --help' to see required arguments and options.`,
+      next_actions: [{ command: "asana-cli --help", description: "Show all available commands" }],
+    }));
+    process.exit(1);
+  },
   onErrorCommand: async (ctx, error) => {
     fatal(error.message, {
       code: "COMMAND_FAILED",
