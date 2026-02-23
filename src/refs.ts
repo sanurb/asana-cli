@@ -1,4 +1,6 @@
-import { api, paginate, getDefaultWorkspaceGid } from "./api.ts";
+import { api } from "./lib/http/http-json-client";
+import { paginate } from "./lib/asana/paginate";
+import { getDefaultWorkspaceGid } from "./lib/asana/workspace";
 import { fatal } from "./output.ts";
 import { type AsanaTask, type AsanaProject, TASK_OPT_FIELDS } from "./types.ts";
 

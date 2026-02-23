@@ -1,5 +1,6 @@
 import { define } from "gunshi";
-import { api, getDefaultWorkspaceGid } from "../api.ts";
+import { api } from "../lib/http/http-json-client";
+import { getDefaultWorkspaceGid } from "../lib/asana/workspace";
 import { ok } from "../output.ts";
 import { resolveTaskRef, resolveProjectRef } from "../refs.ts";
 import { type AsanaTask, formatTask } from "../types.ts";

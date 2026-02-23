@@ -9,10 +9,38 @@
 import { cli, define } from "gunshi";
 import { ok, fatal } from "./output.ts";
 
+const VERSION = "0.1.0";
+const DESCRIPTION = "Agent-first Asana CLI with HATEOAS JSON responses";
+
 import { today, inbox, search, list, show, review, completed } from "./commands/task-query.ts";
 import { add, complete, reopen, delete as deleteCmd, update, move } from "./commands/task-crud.ts";
 import { comments, commentAdd } from "./commands/comments.ts";
 import { projects, sections, tags, addProject, addSection } from "./commands/org.ts";
+
+type EnvelopeError = {
+  readonly ok: false;
+  readonly command: string;
+  readonly error: {
+    readonly message: string;
+    readonly code: string;
+  };
+  readonly fix: string;
+  readonly next_actions: readonly unknown[];
+};
+
+function isEnvelopeError(value: unknown): value is EnvelopeError {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  const err = record.error as Record<string, unknown> | undefined;
+  return (
+    record.ok === false &&
+    typeof record.command === "string" &&
+    typeof err?.message === "string" &&
+    typeof err?.code === "string" &&
+    typeof record.fix === "string" &&
+    Array.isArray(record.next_actions)
+  );
+}
 
 // ── Command tree for self-documenting root ──────────────────────────
 
@@ -41,8 +69,8 @@ const COMMAND_TREE = [
 
 function printRootHelp() {
   ok("help", {
-    version: "0.1.0",
-    description: "Agent-first Asana CLI with HATEOAS JSON responses",
+    version: VERSION,
+    description: DESCRIPTION,
     auth: "ASANA_ACCESS_TOKEN env var or 'secrets lease asana_access_token'",
     ref_formats: [
       "Task/project name (fuzzy matched)",
@@ -76,7 +104,7 @@ if (args.length === 0 || args[0] === "--help" || args[0] === "-h" || args[0] ===
 
 const entry = define({
   name: "asana-cli",
-  description: "Agent-first Asana CLI with HATEOAS JSON responses",
+  description: DESCRIPTION,
   args: {},
   run: (ctx) => {
     if (ctx.omitted) {
@@ -88,8 +116,8 @@ const entry = define({
 try {
 await cli(args, entry, {
   name: "asana-cli",
-  version: "0.1.0",
-  description: "Agent-first Asana CLI with HATEOAS JSON responses",
+  version: VERSION,
+  description: DESCRIPTION,
   subCommands: {
     today,
     inbox,
@@ -113,7 +141,7 @@ await cli(args, entry, {
     "add-section": addSection,
   },
   renderHeader: null,
-  renderValidationErrors: async (ctx, error) => {
+  renderValidationErrors: async (ctx, error: AggregateError) => {
     const messages = error.errors.map((e: Error) => e.message);
     console.error(JSON.stringify({
       ok: false,
@@ -126,6 +154,11 @@ await cli(args, entry, {
     return "";
   },
   onErrorCommand: async (ctx, error) => {
+    if (isEnvelopeError(error)) {
+      console.error(JSON.stringify(error));
+      process.exit(1);
+    }
+
     fatal(error.message, {
       code: "COMMAND_FAILED",
       command: ctx.name ?? "unknown",

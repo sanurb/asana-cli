@@ -126,6 +126,14 @@ Errors:
 ```json
 {
   "ok": false,
-  "error": "Ambiguous task \"deploy\". Matches:\n  \"Deploy pipeline\" (id:123)\n  \"Deploy worker\" (id:456)"
+  "command": "asana-cli complete",
+  "error": {
+    "message": "Ambiguous task \"deploy\". Matches: \"Deploy pipeline\" (id:123), \"Deploy worker\" (id:456)",
+    "code": "AMBIGUOUS_REF"
+  },
+  "fix": "Use the exact id: prefix to disambiguate, e.g. id:123",
+  "next_actions": [
+    { "command": "asana-cli --help", "description": "Show available commands" }
+  ]
 }
 ```

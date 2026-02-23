@@ -71,7 +71,7 @@ export function fatal(
   console.error(
     JSON.stringify({
       ok: false,
-      command: opts.command ? `asana-cli ${opts.command}` : undefined,
+      command: opts.command !== undefined ? `asana-cli ${opts.command}` : "asana-cli",
       error: {
         message,
         code: opts.code ?? "COMMAND_FAILED",

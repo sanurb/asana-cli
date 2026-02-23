@@ -1,5 +1,6 @@
 import { define } from "gunshi";
-import { paginate, getDefaultWorkspaceGid } from "../api.ts";
+import { paginate } from "../lib/asana/paginate";
+import { getDefaultWorkspaceGid } from "../lib/asana/workspace";
 import { ok, truncate } from "../output.ts";
 import { resolveTaskRef, resolveProjectRef } from "../refs.ts";
 import {
@@ -349,13 +350,17 @@ export const completed = define({
   run: async (ctx) => {
     const { since, project, limit: maxResults } = ctx.values;
     const workspace = await getDefaultWorkspaceGid();
-    const allTasks = await paginate<AsanaTask>("/tasks", {
-      assignee: "me",
-      workspace,
-      completed_since: since ?? "2020-01-01",
-      opt_fields: "gid,name,completed,completed_at,due_on,projects",
-      limit: 100,
-    });
+    const allTasks = await paginate<AsanaTask>(
+      "/tasks",
+      {
+        assignee: "me",
+        workspace,
+        completed_since: since ?? "2020-01-01",
+        opt_fields: "gid,name,completed,completed_at,due_on,projects",
+        limit: 100,
+      },
+      maxResults,
+    );
     let tasks = allTasks.filter((t) => t.completed).slice(0, maxResults);
 
     if (project) {

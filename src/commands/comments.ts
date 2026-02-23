@@ -1,5 +1,6 @@
 import { define } from "gunshi";
-import { api, paginate } from "../api.ts";
+import { api } from "../lib/http/http-json-client";
+import { paginate } from "../lib/asana/paginate";
 import { ok, truncate } from "../output.ts";
 import { resolveTaskRef } from "../refs.ts";
 import { type AsanaStory, STORY_OPT_FIELDS, formatStory } from "../types.ts";

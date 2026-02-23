@@ -1,5 +1,7 @@
 import { define } from "gunshi";
-import { api, paginate, getDefaultWorkspaceGid } from "../api.ts";
+import { api } from "../lib/http/http-json-client";
+import { paginate } from "../lib/asana/paginate";
+import { getDefaultWorkspaceGid } from "../lib/asana/workspace";
 import { ok, truncate } from "../output.ts";
 import { resolveProjectRef } from "../refs.ts";
 import { type AsanaProject, type AsanaSection, type AsanaTag } from "../types.ts";
@@ -68,16 +70,18 @@ export const sections = define({
       opt_fields: "gid,name,project",
       limit: 100,
     });
+    const formatted = items.map((s) => ({
+      id: s.gid,
+      name: s.name,
+      projectId: s.project?.gid,
+    }));
+    const { items: truncated, meta } = truncate(formatted);
 
     ok("sections", {
-      count: items.length,
+      ...meta,
       projectId: project.gid,
       projectName: project.name,
-      sections: items.map((s) => ({
-        id: s.gid,
-        name: s.name,
-        projectId: s.project?.gid,
-      })),
+      sections: truncated,
     }, [
       {
         command: "asana-cli list --project <project> [--section <section>]",
