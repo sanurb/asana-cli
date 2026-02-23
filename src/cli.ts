@@ -112,12 +112,9 @@ await cli(args, entry, {
     "add-project": addProject,
     "add-section": addSection,
   },
-  renderHeader: async () => null,
+  renderHeader: null,
   renderValidationErrors: async (ctx, error) => {
-    const messages = error instanceof AggregateError
-      ? error.errors.map((e: Error) => e.message)
-      : [error.message];
-    // Write to stderr and exit — return empty string so gunshi prints nothing further
+    const messages = error.errors.map((e: Error) => e.message);
     console.error(JSON.stringify({
       ok: false,
       command: `asana-cli ${ctx.name ?? "unknown"}`,
@@ -126,6 +123,7 @@ await cli(args, entry, {
       next_actions: [{ command: "asana-cli --help", description: "Show all available commands" }],
     }));
     process.exit(1);
+    return "";
   },
   onErrorCommand: async (ctx, error) => {
     fatal(error.message, {
