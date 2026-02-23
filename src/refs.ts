@@ -2,7 +2,7 @@ import { api } from "./lib/http/http-json-client";
 import { paginate } from "./lib/asana/paginate";
 import { getDefaultWorkspaceGid } from "./lib/asana/workspace";
 import { fatal } from "./output.ts";
-import { type AsanaTask, type AsanaProject, TASK_OPT_FIELDS } from "./types.ts";
+import { type AsanaTask, type AsanaProject, type AsanaSection, TASK_OPT_FIELDS } from "./types.ts";
 
 // ── URL Parsing ─────────────────────────────────────────────────────
 
@@ -33,10 +33,11 @@ function fuzzyMatch<T extends { name?: string; gid: string }>(
   query: string,
   label: string,
 ): T {
+  const sorted = [...items].sort((a, b) => (a.name ?? a.gid).localeCompare(b.name ?? b.gid));
   const lower = query.toLowerCase();
-  const exact = items.filter((t) => t.name?.toLowerCase() === lower);
+  const exact = sorted.filter((t) => t.name?.toLowerCase() === lower);
   if (exact.length === 1) return exact[0];
-  const partial = items.filter((t) => t.name?.toLowerCase().includes(lower));
+  const partial = sorted.filter((t) => t.name?.toLowerCase().includes(lower));
   if (partial.length === 1) return partial[0];
   if (partial.length > 1) {
     fatal(
@@ -142,4 +143,56 @@ export async function resolveProjectRef(ref: string): Promise<AsanaProject> {
   });
 
   return fuzzyMatch(projects, ref, "Project");
+}
+
+export async function resolveSectionRef(projectGid: string, ref: string): Promise<AsanaSection> {
+  const trimmed = ref.trim();
+  if (!trimmed) {
+    fatal("Section reference cannot be empty.", {
+      code: "INVALID_INPUT",
+      fix: "Provide a section name or gid.",
+    });
+  }
+
+  if (isIdRef(trimmed)) {
+    const gid = extractId(trimmed);
+    const sections = await paginate<AsanaSection>(`/projects/${projectGid}/sections`, {
+      opt_fields: "gid,name,project",
+      limit: 100,
+    });
+    const byId = sections.find((s) => s.gid === gid);
+    if (!byId) {
+      fatal(`Section id:${gid} is not in project ${projectGid}.`, {
+        code: "NOT_FOUND",
+        fix: "Run 'asana-cli sections --project <ref>' and choose a section from that project.",
+      });
+    }
+    return byId;
+  }
+
+  if (looksLikeGid(trimmed)) {
+    const sections = await paginate<AsanaSection>(`/projects/${projectGid}/sections`, {
+      opt_fields: "gid,name,project",
+      limit: 100,
+    });
+    const byId = sections.find((s) => s.gid === trimmed);
+    if (byId) return byId;
+  }
+
+  const sections = await paginate<AsanaSection>(`/projects/${projectGid}/sections`, {
+    opt_fields: "gid,name,project",
+    limit: 100,
+  });
+  return fuzzyMatch(sections, trimmed, "Section");
+}
+
+export function requireProjectScopeForTask(task: AsanaTask, projectRef: string | undefined): void {
+  if (projectRef || (task.projects ?? []).length <= 1) return;
+  const candidates = (task.projects ?? [])
+    .map((p) => `${p.name ?? p.gid} (id:${p.gid})`)
+    .join(", ");
+  fatal("Task is multi-homed; project scope is required for this operation.", {
+    code: "MULTI_HOME_AMBIGUITY",
+    fix: `Add --project <ref>. Candidate projects: ${candidates}`,
+  });
 }

@@ -1,6 +1,6 @@
 # asana-cli
 
-Agent-first Asana CLI. HATEOAS JSON responses, `agent-secrets` auth, ref resolution by name/URL/GID.
+Agent-first Asana CLI. HATEOAS JSON responses, `agent-secrets` auth, deterministic ref resolution by name/URL/GID.
 
 ## Why This Exists
 
@@ -70,23 +70,48 @@ secrets add asana_access_token
 All `<ref>` args accept: **task name**, **Asana URL**, **`id:xxx`**, or **raw GID**.
 Project args (`--project`) accept project name or GID.
 
+Universal scope flags:
+
+- `--workspace <ref>` works on every command (workspace name or gid)
+- repeatable `--cf "Field Name=Value"` works on `add` and `update`
+
+Workspace selection policy (deterministic):
+
+1. explicit `--workspace <ref>`
+2. `ASANA_WORKSPACE_GID`
+3. local `.asana-cli.json` (`workspace_gid` or `workspace`)
+4. stable fallback: lexicographically by workspace name, then gid
+
 ```bash
 # Tasks
 asana-cli today                                        # due today + overdue
+asana-cli workspaces                                   # list + selection metadata
+asana-cli users --workspace "My Workspace"             # users in workspace
 asana-cli inbox                                        # My Tasks (incomplete)
 asana-cli search "deploy pipeline"                     # search by name in My Tasks
 asana-cli list --project "Agent Work"                  # tasks in project (by name)
 asana-cli show "Ship media pipeline"                   # task detail + comments (stories)
-asana-cli add "Ship the media pipeline" --due_on 2026-02-22 --project "Agent Work"
+asana-cli add "Ship the media pipeline" --due_on 2026-02-22 --project "Agent Work" --assignee me
 asana-cli complete "Ship the media pipeline"           # by name
-asana-cli update "Ship the media pipeline" --due_on 2026-03-01
+asana-cli update "Ship the media pipeline" --due_on 2026-03-01 --cf "Priority=High"
 asana-cli move "Ship the media pipeline" --project "Done"
+asana-cli subtasks "Ship the media pipeline" --deep
+asana-cli subtask-add "Ship the media pipeline" --name "Follow up" --assignee someone@example.com
+asana-cli deps "Ship the media pipeline" --direction both
+asana-cli dep-add "Ship the media pipeline" --blocked-by "Design approved"
+asana-cli project-add "Ship the media pipeline" --project "Cross-team"
+asana-cli sections move "Ship the media pipeline" --project "Agent Work" --section "In Progress"
+asana-cli attachments "Ship the media pipeline"
+asana-cli attach-link "Ship the media pipeline" --url "https://github.com/org/repo/pull/123"
 asana-cli delete "Ship the media pipeline"
 asana-cli reopen <ref>
 
 # Comments (Stories — critical for async agent conversations)
 asana-cli comments "Ship media pipeline"               # list stories on task
 asana-cli comment-add "Ship media pipeline" --content "Started implementation"
+asana-cli comment-update "Ship media pipeline" --story 123 --content "Updated comment"
+asana-cli comment-delete "Ship media pipeline" --story 123
+asana-cli comment-last "Ship media pipeline" --by me --update "Latest status"
 
 # Completed
 asana-cli completed --since 2026-02-17                 # completed tasks
@@ -98,6 +123,13 @@ asana-cli sections --project "Agent Work"              # sections by project nam
 asana-cli tags                                         # list all tags
 asana-cli add-project "New Project"
 asana-cli add-section "Backlog" --project "Agent Work"
+
+# Custom fields
+asana-cli custom-fields --project "Agent Work"
+asana-cli add "New task" --project "Agent Work" --cf "Priority=High" --cf "Estimate=3"
+
+# Batch execution
+asana-cli batch --file plan.json --stop-on-error
 ```
 
 ## Output Format

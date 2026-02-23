@@ -1,4 +1,5 @@
 import { define } from "gunshi";
+import { api } from "../lib/http/http-json-client";
 import { paginate } from "../lib/asana/paginate";
 import { getDefaultWorkspaceGid } from "../lib/asana/workspace";
 import { ok, truncate } from "../output.ts";
@@ -219,6 +220,10 @@ export const show = define({
       description: "Task reference (name, URL, id:xxx, or GID)",
       required: true,
     },
+    attachments: {
+      type: "boolean" as const,
+      description: "Include lightweight attachment summary",
+    },
   },
   run: async (ctx) => {
     const ref = ctx.values.ref as string;
@@ -229,12 +234,27 @@ export const show = define({
     });
     const { items: commentItems, meta } = truncate(stories.map(formatStory));
 
+    const includeAttachments = Boolean(ctx.values.attachments);
+    const attachments = includeAttachments
+      ? (await api<Array<{ gid: string; name?: string; resource_subtype?: string }>>("GET", `/tasks/${task.gid}/attachments`, {
+          query: { opt_fields: "gid,name,resource_subtype", limit: 20 },
+        })).data
+      : [];
+
     ok("show", {
       ...formatTask(task),
       notes: task.notes || undefined,
       comments: commentItems,
       comments_truncated: meta.truncated,
       comments_total: meta.total,
+      attachments_count: includeAttachments ? attachments.length : undefined,
+      attachments_preview: includeAttachments
+        ? attachments.slice(0, 5).map((a) => ({
+            id: a.gid,
+            name: a.name ?? a.gid,
+            type: a.resource_subtype ?? null,
+          }))
+        : undefined,
     }, [
       {
         command: "asana-cli comment-add <ref> --content <text>",

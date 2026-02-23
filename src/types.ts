@@ -15,6 +15,9 @@ export type AsanaTask = {
   permalink_url?: string | null;
   num_subtasks?: number;
   tags?: { gid: string; name?: string }[] | null;
+  dependencies?: { gid: string; name?: string }[] | null;
+  dependents?: { gid: string; name?: string }[] | null;
+  custom_fields?: { gid: string; name?: string; resource_subtype?: string; display_value?: string | null }[] | null;
 };
 
 export type AsanaProject = {
@@ -41,6 +44,7 @@ export type AsanaStory = {
 export type AsanaUser = {
   gid: string;
   name?: string;
+  email?: string;
   workspaces?: { gid: string; name?: string }[] | null;
 };
 
@@ -56,6 +60,9 @@ export const TASK_OPT_FIELDS = [
   "assignee", "assignee.name", "workspace", "workspace.name",
   "projects", "projects.name", "memberships", "memberships.project",
   "memberships.section", "parent", "permalink_url", "tags", "tags.name",
+  "assignee.gid", "dependencies", "dependencies.name", "dependents",
+  "dependents.name", "custom_fields", "custom_fields.name",
+  "custom_fields.display_value", "custom_fields.resource_subtype",
 ].join(",");
 
 export const STORY_OPT_FIELDS = "gid,type,text,created_at,created_by,created_by.name";
@@ -71,12 +78,19 @@ export function formatTask(t: AsanaTask) {
     due_on: t.due_on ?? null,
     due_at: t.due_at ?? null,
     assignee: t.assignee?.name ?? t.assignee?.gid ?? undefined,
+    assignee_gid: t.assignee?.gid ?? undefined,
     projectIds: t.projects?.map((p) => p.gid) ?? [],
     projectNames: t.projects?.map((p) => p.name) ?? undefined,
     section: t.memberships?.[0]?.section?.name ?? undefined,
     parentId: t.parent?.gid ?? undefined,
     permalink_url: t.permalink_url ?? undefined,
     tags: t.tags?.map((x) => x.name ?? x.gid) ?? undefined,
+    custom_fields: t.custom_fields?.map((f) => ({
+      id: f.gid,
+      name: f.name ?? f.gid,
+      type: f.resource_subtype,
+      value: f.display_value ?? null,
+    })),
   };
 }
 

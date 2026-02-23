@@ -2,8 +2,10 @@ import { define } from "gunshi";
 import { api } from "../lib/http/http-json-client";
 import { getDefaultWorkspaceGid } from "../lib/asana/workspace";
 import { ok } from "../output.ts";
-import { resolveTaskRef, resolveProjectRef } from "../refs.ts";
+import { resolveTaskRef, resolveProjectRef, requireProjectScopeForTask } from "../refs.ts";
 import { type AsanaTask, formatTask } from "../types.ts";
+import { resolveAssigneeRef } from "../lib/asana/users";
+import { buildCustomFieldsPayload } from "../lib/asana/custom-fields";
 
 // ── add ──────────────────────────────────────────────────────────────
 
@@ -39,6 +41,10 @@ export const add = define({
       type: "string" as const,
       description: "Due date (YYYY-MM-DD)",
     },
+    assignee: {
+      type: "string" as const,
+      description: "Assignee: me|<email>|<gid>",
+    },
     tags: {
       type: "string" as const,
       description: "Comma-separated tag GIDs",
@@ -46,7 +52,7 @@ export const add = define({
   },
   examples: "asana-cli add 'Fix login bug' --due_on 2025-03-01 --project MyProject",
   run: async (ctx) => {
-    const { name, description, project, section, parent, due_on, tags } = ctx.values;
+    const { name, description, project, section, parent, due_on, tags, assignee } = ctx.values;
     const workspace = await getDefaultWorkspaceGid();
     const data: Record<string, unknown> = {
       name: name as string,
@@ -58,13 +64,19 @@ export const add = define({
     if (due_on) data.due_on = due_on;
     if (parent) data.parent = parent;
     if (tags) data.tags = tags.split(",").map((s) => s.trim());
+    if (assignee) data.assignee = (await resolveAssigneeRef(assignee, workspace)).gid;
 
     if (project) {
       const proj = await resolveProjectRef(project);
       data.projects = [proj.gid];
       if (section) data.section = section;
-    } else {
+    } else if (!assignee) {
       data.assignee = "me";
+    }
+
+    const customFields = await buildCustomFieldsPayload(typeof project === "string" ? (await resolveProjectRef(project)).gid : undefined);
+    if (customFields) {
+      data.custom_fields = customFields;
     }
 
     const res = await api<AsanaTask>("POST", "/tasks", { body: data });
@@ -195,19 +207,41 @@ export const update = define({
       type: "string" as const,
       description: "New due date (YYYY-MM-DD)",
     },
+    assignee: {
+      type: "string" as const,
+      description: "Assignee: me|<email>|<gid>",
+    },
+    project: {
+      type: "string" as const,
+      description: "Project ref for scoped operations (required for --cf on multi-home tasks)",
+      short: "p",
+    },
     tags: {
       type: "string" as const,
       description: "Comma-separated tag GIDs",
     },
   },
   run: async (ctx) => {
-    const { ref, name, description, due_on, tags } = ctx.values;
+    const { ref, name, description, due_on, tags, assignee, project } = ctx.values;
     const task = await resolveTaskRef(ref as string);
+    requireProjectScopeForTask(task, project);
     const data: Record<string, unknown> = {};
     if (name) data.name = name;
     if (description !== undefined) data.notes = description;
     if (due_on) data.due_on = due_on;
+    if (assignee) {
+      const workspace = task.workspace?.gid ?? (await getDefaultWorkspaceGid());
+      data.assignee = (await resolveAssigneeRef(assignee, workspace)).gid;
+    }
     if (tags) data.tags = tags.split(",").map((s) => s.trim());
+    if (project) {
+      const proj = await resolveProjectRef(project);
+      const customFields = await buildCustomFieldsPayload(proj.gid);
+      if (customFields) data.custom_fields = customFields;
+    } else {
+      const customFields = await buildCustomFieldsPayload(undefined);
+      if (customFields) data.custom_fields = customFields;
+    }
 
     const res = await api<AsanaTask>("PUT", `/tasks/${task.gid}`, { body: data });
 
@@ -278,5 +312,59 @@ export const move = define({
         params: { project: { value: project ?? undefined, description: "Project name or GID" } },
       },
     ]);
+  },
+});
+
+export const projectAdd = define({
+  name: "project-add",
+  description: "Add task membership in a project",
+  args: {
+    ref: {
+      type: "positional" as const,
+      description: "Task reference",
+      required: true,
+    },
+    project: {
+      type: "string" as const,
+      description: "Project reference",
+      required: true,
+    },
+  },
+  run: async (ctx) => {
+    const task = await resolveTaskRef(ctx.values.ref as string);
+    const project = await resolveProjectRef(ctx.values.project as string);
+    await api("POST", `/tasks/${task.gid}/addProject`, { body: { project: project.gid } });
+    ok("project-add", {
+      task: { id: task.gid, name: task.name },
+      project: { id: project.gid, name: project.name },
+      added: true,
+    });
+  },
+});
+
+export const projectRemove = define({
+  name: "project-remove",
+  description: "Remove task membership from a project",
+  args: {
+    ref: {
+      type: "positional" as const,
+      description: "Task reference",
+      required: true,
+    },
+    project: {
+      type: "string" as const,
+      description: "Project reference",
+      required: true,
+    },
+  },
+  run: async (ctx) => {
+    const task = await resolveTaskRef(ctx.values.ref as string);
+    const project = await resolveProjectRef(ctx.values.project as string);
+    await api("POST", `/tasks/${task.gid}/removeProject`, { body: { project: project.gid } });
+    ok("project-remove", {
+      task: { id: task.gid, name: task.name },
+      project: { id: project.gid, name: project.name },
+      removed: true,
+    });
   },
 });
