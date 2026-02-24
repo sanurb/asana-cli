@@ -9,9 +9,10 @@
 import { cli, define } from "gunshi";
 import { ok, fatal } from "./output.ts";
 import { parseGlobalCliContext } from "./lib/asana/cli-context";
+import pkg from "../package.json" with { type: "json" };
 
-const VERSION = "0.1.0";
-const DESCRIPTION = "Agent-first Asana CLI with HATEOAS JSON responses";
+const VERSION = pkg.version;
+const DESCRIPTION = pkg.description ?? "Agent-first Asana CLI with HATEOAS JSON responses";
 
 import { today, inbox, search, list, show, review, completed } from "./commands/task-query.ts";
 import { add, complete, reopen, delete as deleteCmd, update, move, projectAdd, projectRemove } from "./commands/task-crud.ts";

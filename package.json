@@ -1,6 +1,7 @@
 {
   "name": "asana-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Agent-first Asana CLI with HATEOAS JSON responses",
   "private": true,
   "type": "module",
   "bin": {
