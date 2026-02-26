@@ -2,55 +2,71 @@
 /**
  * asana-cli — Agent-first Asana CLI
  *
- * HATEOAS JSON responses. Bearer token auth via env or agent-secrets.
- * Zero runtime deps beyond gunshi — raw fetch() against Asana REST API.
+ * Architecture:
+ *  src/sdk/        — pure async functions, injectable client
+ *  src/hateoas/    — HATEOAS envelope helpers
+ *  src/cli/        — thin arg parsing + command wiring (this layer)
+ *  src/mcp/        — MCP server (asana-cli mcp)
+ *
+ * Zero global state except for the CLI-layer singleton client set up here.
  */
 
 import { cli, define } from "gunshi";
-import { ok, fatal } from "./output.ts";
-import { parseGlobalCliContext } from "./lib/asana/cli-context";
+import { ok, fatal } from "./hateoas/output.ts";
+import { setupCliClient } from "./cli/client.ts";
+import { createClientFromEnv } from "./sdk/client.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const VERSION = pkg.version;
 const DESCRIPTION = pkg.description ?? "Agent-first Asana CLI with HATEOAS JSON responses";
 
-import { today, inbox, search, list, show, review, completed } from "./commands/task-query.ts";
-import { add, complete, reopen, delete as deleteCmd, update, move, projectAdd, projectRemove } from "./commands/task-crud.ts";
-import { comments, commentAdd, commentUpdate, commentDelete, commentLast } from "./commands/comments.ts";
-import { projects, sections, tags, addProject, addSection, sectionsMove } from "./commands/org.ts";
-import { workspaces, users } from "./commands/workspace-users.ts";
-import { subtasks, subtaskAdd } from "./commands/subtasks.ts";
-import { customFields } from "./commands/custom-fields.ts";
-import { deps, depAdd, depRemove } from "./commands/dependencies.ts";
-import { attachments, attachLink } from "./commands/attachments.ts";
-import { batch } from "./commands/batch.ts";
+// ── Command imports ───────────────────────────────────────────────────
 
-type EnvelopeError = {
-  readonly ok: false;
-  readonly command: string;
-  readonly error: {
-    readonly message: string;
-    readonly code: string;
-  };
-  readonly fix: string;
-  readonly next_actions: readonly unknown[];
+import { today, inbox, search, list, show, review, completed } from "./cli/commands/task-query.ts";
+import { add, complete, reopen, delete as deleteCmd, update, move, projectAdd, projectRemove } from "./cli/commands/task-crud.ts";
+import { comments, commentAdd, commentUpdate, commentDelete, commentLast } from "./cli/commands/comments.ts";
+import { projects, sections, tags, addProject, addSection, sectionsMove } from "./cli/commands/org.ts";
+import { workspaces, users } from "./cli/commands/workspace-users.ts";
+import { subtasks, subtaskAdd } from "./cli/commands/subtasks.ts";
+import { customFields } from "./cli/commands/custom-fields.ts";
+import { deps, depAdd, depRemove } from "./cli/commands/dependencies.ts";
+import { attachments, attachLink } from "./cli/commands/attachments.ts";
+import { batch } from "./cli/commands/batch.ts";
+
+// ── Global flag parsing ──────────────────────────────────────────────
+//
+// --workspace and --cf must be stripped before gunshi sees the args.
+// They configure the CLI client singleton used by all command run fns.
+
+type ParsedGlobals = {
+  readonly args: string[];
+  readonly workspaceRef?: string;
+  readonly customFields: readonly string[];
 };
 
-function isEnvelopeError(value: unknown): value is EnvelopeError {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  const err = record.error as Record<string, unknown> | undefined;
-  return (
-    record.ok === false &&
-    typeof record.command === "string" &&
-    typeof err?.message === "string" &&
-    typeof err?.code === "string" &&
-    typeof record.fix === "string" &&
-    Array.isArray(record.next_actions)
-  );
+function parseGlobalFlags(rawArgs: readonly string[]): ParsedGlobals {
+  const passthrough: string[] = [];
+  const customFieldEntries: string[] = [];
+  let workspaceRef: string | undefined;
+  const args = [...rawArgs];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if ((arg === "--workspace" || arg === "-W") && args[i + 1] && !args[i + 1].startsWith("-")) {
+      workspaceRef = args[i + 1];
+      i += 1;
+    } else if (arg === "--cf" && args[i + 1]) {
+      customFieldEntries.push(args[i + 1]);
+      i += 1;
+    } else {
+      passthrough.push(arg);
+    }
+  }
+
+  return { args: passthrough, workspaceRef, customFields: customFieldEntries };
 }
 
-// ── Command tree for self-documenting root ──────────────────────────
+// ── Command tree for self-documenting root ───────────────────────────
 
 const COMMAND_TREE = [
   { name: "today", description: "Tasks due today + overdue (assignee: me)", usage: "asana-cli today" },
@@ -90,6 +106,7 @@ const COMMAND_TREE = [
   { name: "add-section", description: "Create a section in a project", usage: "asana-cli add-section <name> --project <name>" },
   { name: "sections move", description: "Move task between sections with ordering", usage: "asana-cli sections move <task-ref> --project <ref> --section <ref> [--before <task-ref>|--after <task-ref>]" },
   { name: "batch", description: "Execute ordered plan file", usage: "asana-cli batch --file <plan.json> [--stop-on-error|--continue]" },
+  { name: "mcp", description: "Start MCP server over stdio", usage: "asana-cli mcp" },
 ];
 
 function printRootHelp() {
@@ -103,125 +120,156 @@ function printRootHelp() {
       "Explicit ID: id:<gid>",
       "Raw numeric GID",
     ],
+    global_flags: [
+      "--workspace <ref>  Override workspace (name or GID)",
+      "--cf \"Name=Value\"  Set custom field (repeatable)",
+    ],
     commands: COMMAND_TREE,
   }, [
     { command: "asana-cli today", description: "See what's due today" },
     { command: "asana-cli inbox", description: "List all incomplete tasks" },
     { command: "asana-cli review", description: "Full dashboard overview" },
-    {
-      command: "asana-cli search <query>",
-      description: "Search tasks by name",
-      params: { query: { required: true, description: "Search term" } },
-    },
+    { command: "asana-cli mcp", description: "Start MCP server" },
   ]);
 }
 
-// ── Early exit for root / help ──────────────────────────────────────
-// Bypass gunshi for no-args and --help to avoid plain text output.
+// ── Bootstrapping ────────────────────────────────────────────────────
 
-const parsed = parseGlobalCliContext(process.argv.slice(2));
+const parsed = parseGlobalFlags(process.argv.slice(2));
 const args = parsed.args;
+
+// Handle "sections move" alias
 if (args[0] === "sections" && args[1] === "move") {
   args.splice(0, 2, "sections-move");
 }
+
+// Short-circuit for help/no-args (before any auth/client work)
 if (args.length === 0 || args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
   printRootHelp();
   process.exit(0);
 }
 
-// ── Entry ───────────────────────────────────────────────────────────
+// Handle MCP server early (before client setup — server manages its own lifecycle)
+if (args[0] === "mcp") {
+  const { startMcpServer } = await import("./mcp/server.ts");
+  await startMcpServer();
+  process.exit(0);
+}
+
+// ── Client setup ─────────────────────────────────────────────────────
+//
+// createClientFromEnv() reads ASANA_ACCESS_TOKEN → ASANA_TOKEN → ASANA_PAT → agent-secrets.
+// Only the token is resolved at this point; workspace resolution is lazy (first command that needs it).
+
+const envClient = await createClientFromEnv({ workspaceRef: parsed.workspaceRef });
+setupCliClient(envClient.config, parsed.customFields);
+
+// ── Gunshi dispatch ──────────────────────────────────────────────────
+
+type EnvelopeError = {
+  readonly ok: false;
+  readonly command: string;
+  readonly error: { readonly message: string; readonly code: string };
+  readonly fix: string;
+  readonly next_actions: readonly unknown[];
+};
+
+function isEnvelopeError(value: unknown): value is EnvelopeError {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  const err = r.error as Record<string, unknown> | undefined;
+  return (
+    r.ok === false &&
+    typeof r.command === "string" &&
+    typeof err?.message === "string" &&
+    typeof err?.code === "string" &&
+    typeof r.fix === "string" &&
+    Array.isArray(r.next_actions)
+  );
+}
 
 const entry = define({
   name: "asana-cli",
   description: DESCRIPTION,
   args: {},
-  run: (ctx) => {
-    if (ctx.omitted) {
-      printRootHelp();
-    }
-  },
+  run: (ctx) => { if (ctx.omitted) printRootHelp(); },
 });
 
 try {
-await cli(args, entry, {
-  name: "asana-cli",
-  version: VERSION,
-  description: DESCRIPTION,
-  subCommands: {
-    workspaces,
-    users,
-    today,
-    inbox,
-    search,
-    list,
-    show,
-    review,
-    completed,
-    add,
-    "subtask-add": subtaskAdd,
-    subtasks,
-    complete,
-    reopen,
-    delete: deleteCmd,
-    update,
-    move,
-    "project-add": projectAdd,
-    "project-remove": projectRemove,
-    deps,
-    "dep-add": depAdd,
-    "dep-remove": depRemove,
-    attachments,
-    "attach-link": attachLink,
-    "custom-fields": customFields,
-    comments,
-    "comment-add": commentAdd,
-    "comment-update": commentUpdate,
-    "comment-delete": commentDelete,
-    "comment-last": commentLast,
-    projects,
-    sections,
-    "sections-move": sectionsMove,
-    tags,
-    "add-project": addProject,
-    "add-section": addSection,
-    batch,
-  },
-  renderHeader: null,
-  renderValidationErrors: async (ctx, error: AggregateError) => {
-    const messages = error.errors.map((e: Error) => e.message);
-    console.error(JSON.stringify({
-      ok: false,
-      command: `asana-cli ${ctx.name ?? "unknown"}`,
-      error: { message: messages.join("; "), code: "INVALID_INPUT" },
-      fix: `Run 'asana-cli ${ctx.name} --help' to see required arguments and options.`,
-      next_actions: [{ command: "asana-cli --help", description: "Show all available commands" }],
-    }));
-    process.exit(1);
-    return "";
-  },
-  onErrorCommand: async (ctx, error) => {
-    if (isEnvelopeError(error)) {
-      console.error(JSON.stringify(error));
+  await cli(args, entry, {
+    name: "asana-cli",
+    version: VERSION,
+    description: DESCRIPTION,
+    subCommands: {
+      workspaces,
+      users,
+      today,
+      inbox,
+      search,
+      list,
+      show,
+      review,
+      completed,
+      add,
+      "subtask-add": subtaskAdd,
+      subtasks,
+      complete,
+      reopen,
+      delete: deleteCmd,
+      update,
+      move,
+      "project-add": projectAdd,
+      "project-remove": projectRemove,
+      deps,
+      "dep-add": depAdd,
+      "dep-remove": depRemove,
+      attachments,
+      "attach-link": attachLink,
+      "custom-fields": customFields,
+      comments,
+      "comment-add": commentAdd,
+      "comment-update": commentUpdate,
+      "comment-delete": commentDelete,
+      "comment-last": commentLast,
+      projects,
+      sections,
+      "sections-move": sectionsMove,
+      tags,
+      "add-project": addProject,
+      "add-section": addSection,
+      batch,
+    },
+    renderHeader: null,
+    renderValidationErrors: async (ctx, error: AggregateError) => {
+      const messages = (error.errors as Error[]).map((e) => e.message);
+      console.error(JSON.stringify({
+        ok: false,
+        command: `asana-cli ${ctx.name ?? "unknown"}`,
+        error: { message: messages.join("; "), code: "INVALID_INPUT" },
+        fix: `Run 'asana-cli ${ctx.name ?? ""} --help' to see required arguments and options.`,
+        next_actions: [{ command: "asana-cli --help", description: "Show all available commands" }],
+      }));
       process.exit(1);
-    }
-
-    fatal(error.message, {
-      code: "COMMAND_FAILED",
-      command: ctx.name ?? "unknown",
-      fix: `Check the error details and retry. Run 'asana-cli ${ctx.name} --help' for usage.`,
-      nextActions: [
-        { command: "asana-cli --help", description: "Show all available commands" },
-      ],
-    });
-  },
-});
+      return "";
+    },
+    onErrorCommand: async (ctx, error) => {
+      if (isEnvelopeError(error)) {
+        console.error(JSON.stringify(error));
+        process.exit(1);
+      }
+      fatal((error as Error).message, {
+        code: "COMMAND_FAILED",
+        command: ctx.name ?? "unknown",
+        fix: `Check the error details and retry. Run 'asana-cli ${ctx.name ?? ""} --help' for usage.`,
+        nextActions: [{ command: "asana-cli --help", description: "Show all available commands" }],
+      });
+    },
+  });
 } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   fatal(message, {
     code: "COMMAND_FAILED",
     fix: "Run 'asana-cli' with no args to see available commands.",
-    nextActions: [
-      { command: "asana-cli --help", description: "Show all available commands" },
-    ],
+    nextActions: [{ command: "asana-cli --help", description: "Show all available commands" }],
   });
 }
